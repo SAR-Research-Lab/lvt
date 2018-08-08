@@ -1,0 +1,25 @@
+%YAML:1.0
+
+fx: 535.4
+fy: 539.2
+cx: 320.1
+cy: 247.6
+img_width: 640
+img_height: 480
+near_plane_distance: 0.1
+far_plane_distance: 5.0
+triangulation_ratio_test_threshold: 0.60
+tracking_ratio_test_threshold: 0.70
+descriptor_matching_threshold: 30
+min_num_matches_for_tracking: 10
+tracking_radius: 30
+agast_threshold: 18
+detection_cell_size: 2000
+max_keypoints_per_cell: 1000
+untracked_threshold: 10
+staged_threshold: 0
+enable_logging: 0
+enable_visualization: 1
+triangulation_policy: 2
+viewer_camera_size: 0.06
+viewer_point_size: 2

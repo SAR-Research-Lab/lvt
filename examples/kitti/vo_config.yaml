@@ -1,0 +1,21 @@
+%YAML:1.0
+
+near_plane_distance: 0.01
+far_plane_distance: 500.0
+triangulation_ratio_test_threshold: 0.60
+tracking_ratio_test_threshold: 0.80
+descriptor_matching_threshold: 30
+min_num_matches_for_tracking: 10
+tracking_radius: 25
+agast_threshold: 25
+detection_cell_size: 250
+max_keypoints_per_cell: 150
+row_matching_vertical_search_radius: 2
+hashing_cell_size: 25
+untracked_threshold: 10
+staged_threshold: 2
+enable_logging: 0
+enable_visualization: 0
+triangulation_policy: 1
+viewer_camera_size: 0.6
+viewer_point_size: 5

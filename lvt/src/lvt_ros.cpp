@@ -1,0 +1,287 @@
+/*********************************************************************
+ * BSD 3-Clause License
+ *
+ * Copyright (c) 2018, Rawashdeh Research Group
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from
+ *    this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+ * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ **********************************************************************/
+// Author: Mohamed Aladem
+
+#include "lvt_system.h"
+#include <ros/ros.h>
+#include <sensor_msgs/Image.h>
+#include <sensor_msgs/CameraInfo.h>
+#include <message_filters/subscriber.h>
+#include <message_filters/synchronizer.h>
+#include <message_filters/sync_policies/exact_time.h>
+#include <message_filters/sync_policies/approximate_time.h>
+#include <image_transport/subscriber_filter.h>
+#include <sensor_msgs/image_encodings.h>
+#include <image_geometry/stereo_camera_model.h>
+#include <cv_bridge/cv_bridge.h>
+#include <nav_msgs/Odometry.h>
+#include <geometry_msgs/PoseStamped.h>
+#include <std_srvs/Empty.h>
+#include <tf2/LinearMath/Transform.h>
+#include <tf2_ros/transform_listener.h>
+#include <tf2_ros/transform_broadcaster.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+
+class lvt_ros
+{
+  public:
+	lvt_ros(const std::string &img_transport);
+	~lvt_ros();
+
+  private:
+	lvt_system *m_vo_system;
+	lvt_parameters m_vo_params;
+
+	image_transport::SubscriberFilter m_img_left_sub, m_img_right_sub;
+	message_filters::Subscriber<sensor_msgs::CameraInfo> m_info_left_sub, m_info_right_sub;
+	typedef message_filters::sync_policies::ExactTime<sensor_msgs::Image, sensor_msgs::CameraInfo, sensor_msgs::Image, sensor_msgs::CameraInfo> ExactPolicy;
+	typedef message_filters::Synchronizer<ExactPolicy> ExactSync;
+	typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, sensor_msgs::CameraInfo, sensor_msgs::Image, sensor_msgs::CameraInfo> ApproximatePolicy;
+	typedef message_filters::Synchronizer<ApproximatePolicy> ApproximateSync;
+	boost::shared_ptr<ExactSync> m_exact_sync;
+	boost::shared_ptr<ApproximateSync> m_approximate_sync;
+
+	ros::ServiceServer m_reset_srv;
+	ros::Publisher m_odom_pub;
+	ros::Publisher m_pose_pub;
+
+	tf2_ros::Buffer m_tf_buffer;
+	tf2_ros::TransformListener m_tf_listener;
+	tf2_ros::TransformBroadcaster m_tf_broadcaster;
+	std::string m_camera_frame_id, m_odom_frame_id, m_baselink_frame_id;
+	tf2::Transform m_pose, m_last_pose;
+	ros::Time m_last_update_time;
+
+	void create_vo_system(const sensor_msgs::CameraInfoConstPtr &info_msg_left, const sensor_msgs::CameraInfoConstPtr &info_msg_right);
+	bool reset_vo(std_srvs::Empty::Request &, std_srvs::Empty::Response &);
+	void on_stereo_image(
+		const sensor_msgs::ImageConstPtr &img_msg_left, const sensor_msgs::CameraInfoConstPtr &info_msg_left,
+		const sensor_msgs::ImageConstPtr &img_msg_right, const sensor_msgs::CameraInfoConstPtr &info_msg_right);
+};
+
+lvt_ros::lvt_ros(const std::string &img_transport)
+	: m_vo_system(nullptr), m_tf_listener(m_tf_buffer)
+{
+	m_pose.setIdentity();
+	m_last_pose.setIdentity();
+
+	ros::NodeHandle nh;
+	std::string stereo_ns = nh.resolveName("stereo");
+	std::string left_img_topic = ros::names::clean(stereo_ns + "/left/" + nh.resolveName("image_rect"));
+	std::string right_img_topic = ros::names::clean(stereo_ns + "/right/" + nh.resolveName("image_rect"));
+	std::string left_info_topic = stereo_ns + "/left/camera_info";
+	std::string right_info_topic = stereo_ns + "/right/camera_info";
+
+	ROS_INFO("Subscribed to:\n\t* %s\n\t* %s\n\t* %s\n\t* %s",
+			 left_img_topic.c_str(), right_img_topic.c_str(),
+			 left_info_topic.c_str(), right_info_topic.c_str());
+
+	image_transport::ImageTransport it(nh);
+	m_img_left_sub.subscribe(it, left_img_topic, 10, img_transport);
+	m_img_right_sub.subscribe(it, right_img_topic, 10, img_transport);
+	m_info_left_sub.subscribe(nh, left_info_topic, 10);
+	m_info_right_sub.subscribe(nh, right_info_topic, 10);
+
+	ros::NodeHandle local_nh("~");
+
+	int queue_size;
+	local_nh.param("queue_size", queue_size, 10);
+
+	bool use_approx;
+	local_nh.param("approximate_sync", use_approx, false);
+	if (use_approx)
+	{
+		m_approximate_sync.reset(new ApproximateSync(ApproximatePolicy(queue_size),
+													 m_img_left_sub, m_info_left_sub,
+													 m_img_right_sub, m_info_right_sub));
+		m_approximate_sync->registerCallback(boost::bind(&lvt_ros::on_stereo_image, this, _1, _2, _3, _4));
+	}
+	else
+	{
+		m_exact_sync.reset(new ExactSync(ExactPolicy(queue_size),
+										 m_img_left_sub, m_info_left_sub,
+										 m_img_right_sub, m_info_right_sub));
+		m_exact_sync->registerCallback(boost::bind(&lvt_ros::on_stereo_image, this, _1, _2, _3, _4));
+	}
+
+	m_reset_srv = local_nh.advertiseService("reset_vo", &lvt_ros::reset_vo, this);
+	m_odom_pub = local_nh.advertise<nav_msgs::Odometry>("odometry", 1);
+	m_pose_pub = local_nh.advertise<geometry_msgs::PoseStamped>("pose", 1);
+
+	local_nh.param("sensor_frame_id", m_camera_frame_id, std::string("camera"));
+	local_nh.param("odom_frame_id", m_odom_frame_id, std::string("odom"));
+	local_nh.param("base_link_frame_id", m_baselink_frame_id, std::string("base_link"));
+
+	local_nh.getParam("near_plane_distance", m_vo_params.near_plane_distance);
+	local_nh.getParam("far_plane_distance", m_vo_params.far_plane_distance);
+	local_nh.getParam("triangulation_ratio_test_threshold", m_vo_params.triangulation_ratio_test_threshold);
+	local_nh.getParam("tracking_ratio_test_threshold", m_vo_params.tracking_ratio_test_threshold);
+	local_nh.getParam("descriptor_matching_threshold", m_vo_params.descriptor_matching_threshold);
+	local_nh.getParam("tracking_radius", m_vo_params.tracking_radius);
+	local_nh.getParam("detection_cell_size", m_vo_params.detection_cell_size);
+	local_nh.getParam("max_keypoints_per_cell", m_vo_params.max_keypoints_per_cell);
+	local_nh.getParam("agast_threshold", m_vo_params.agast_threshold);
+	local_nh.getParam("untracked_threshold", m_vo_params.untracked_threshold);
+	local_nh.getParam("staged_threshold", m_vo_params.staged_threshold);
+	local_nh.getParam("enable_logging", m_vo_params.enable_logging);
+	local_nh.getParam("enable_visualization", m_vo_params.enable_visualization);
+}
+
+lvt_ros::~lvt_ros()
+{
+	if (m_vo_system)
+	{
+		lvt_system::destroy(m_vo_system);
+	}
+}
+
+void lvt_ros::create_vo_system(const sensor_msgs::CameraInfoConstPtr &info_msg_left, const sensor_msgs::CameraInfoConstPtr &info_msg_right)
+{
+	image_geometry::StereoCameraModel model;
+	model.fromCameraInfo(*info_msg_left, *info_msg_right);
+	m_vo_params.baseline = model.baseline();
+	m_vo_params.fx = model.left().fx();
+	m_vo_params.fy = model.left().fy();
+	m_vo_params.cx = model.left().cx();
+	m_vo_params.cy = model.left().cy();
+	m_vo_params.img_width = info_msg_left->width;
+	m_vo_params.img_height = info_msg_left->height;
+	m_vo_system = lvt_system::create(m_vo_params, lvt_system::eSensor_STEREO);
+	m_pose.setIdentity();
+}
+
+bool lvt_ros::reset_vo(std_srvs::Empty::Request &, std_srvs::Empty::Response &)
+{
+	ROS_WARN_COND(!m_vo_system, "Trying to reset uninitialized vo system.");
+	if (m_vo_system)
+	{
+		m_vo_system->reset();
+		ROS_INFO("VO was reset.");
+	}
+	return true;
+}
+
+void lvt_ros::on_stereo_image(
+	const sensor_msgs::ImageConstPtr &img_msg_left, const sensor_msgs::CameraInfoConstPtr &info_msg_left,
+	const sensor_msgs::ImageConstPtr &img_msg_right, const sensor_msgs::CameraInfoConstPtr &info_msg_right)
+{
+	if (!m_vo_system)
+	{
+		create_vo_system(info_msg_left, info_msg_right);
+	}
+
+	const ros::Time &timestamp = img_msg_left->header.stamp;
+	if (m_last_update_time > timestamp)
+	{
+		ROS_WARN("Images with older time stamps recieved. Will be ignored.");
+		return;
+	}
+
+	cv_bridge::CvImageConstPtr img_ptr_l = cv_bridge::toCvShare(img_msg_left, "mono8");
+	cv_bridge::CvImageConstPtr img_ptr_r = cv_bridge::toCvShare(img_msg_right, "mono8");
+
+	ROS_WARN_COND(img_ptr_l->image.empty(), "LEFT IMAGE IS EMPTY!!");
+	ROS_WARN_COND(img_ptr_r->image.empty(), "RIGHT IMAGE IS EMPTY!!");
+
+	ROS_ASSERT(img_msg_left->width == img_msg_right->width);
+	ROS_ASSERT(img_msg_left->height == img_msg_right->height);
+	lvt_pose sl_pose = m_vo_system->track(img_ptr_l->image, img_ptr_r->image);
+	if (m_vo_system->get_state() == lvt_system::eState_LOST)
+	{
+		ROS_ERROR("Tracking was lost. Reseting VO.");
+		m_vo_system->reset();
+		return;
+	}
+
+	const lvt_quaternion q = sl_pose.get_orientation_quaternion();
+	const lvt_vector3 pos = sl_pose.get_position();
+	m_pose.setOrigin(tf2::Vector3(pos.x(), pos.y(), pos.z()));
+	m_pose.setRotation(tf2::Quaternion(q.x(), q.y(), q.z(), q.w()));
+	tf2::Transform base_to_sensor;
+	std::string error_msg;
+	if (m_tf_buffer.canTransform(m_baselink_frame_id, m_camera_frame_id, timestamp, &error_msg))
+	{
+		tf2::fromMsg(m_tf_buffer.lookupTransform(m_baselink_frame_id, m_camera_frame_id, timestamp).transform,
+					 base_to_sensor);
+	}
+	else
+	{
+		ROS_WARN_THROTTLE(10.0, "Cannot transform from '%s' to '%s'. Will assume identity.",
+						  m_baselink_frame_id.c_str(), m_camera_frame_id.c_str());
+		ROS_DEBUG("Transform error: %s", error_msg.c_str());
+		base_to_sensor.setIdentity();
+	}
+
+	tf2::Transform base_transform = base_to_sensor * m_pose * base_to_sensor.inverse();
+
+	nav_msgs::Odometry odometry_msg;
+	odometry_msg.header.stamp = timestamp;
+	odometry_msg.header.frame_id = m_odom_frame_id;
+	odometry_msg.child_frame_id = m_baselink_frame_id;
+	tf2::toMsg(base_transform, odometry_msg.pose.pose);
+	tf2::Transform delta_transform = base_to_sensor * m_last_pose.inverse() * m_pose * base_to_sensor.inverse();
+	if (!m_last_update_time.isZero())
+	{
+		double delta_t = (timestamp - m_last_update_time).toSec();
+		if (delta_t)
+		{
+			odometry_msg.twist.twist.linear.x = delta_transform.getOrigin().getX() / delta_t;
+			odometry_msg.twist.twist.linear.y = delta_transform.getOrigin().getY() / delta_t;
+			odometry_msg.twist.twist.linear.z = delta_transform.getOrigin().getZ() / delta_t;
+			tf2::Quaternion delta_rot = delta_transform.getRotation();
+			tf2Scalar angle = delta_rot.getAngle();
+			tf2::Vector3 axis = delta_rot.getAxis();
+			tf2::Vector3 angular_twist = axis * angle / delta_t;
+			odometry_msg.twist.twist.angular.x = angular_twist.x();
+			odometry_msg.twist.twist.angular.y = angular_twist.y();
+			odometry_msg.twist.twist.angular.z = angular_twist.z();
+		}
+	}
+
+	m_odom_pub.publish(odometry_msg);
+
+	geometry_msgs::PoseStamped pose_msg;
+	pose_msg.header.stamp = odometry_msg.header.stamp;
+	pose_msg.header.frame_id = odometry_msg.header.frame_id;
+	pose_msg.pose = odometry_msg.pose.pose;
+	m_pose_pub.publish(pose_msg);
+
+	geometry_msgs::TransformStamped published_tf_msg;
+	published_tf_msg.transform = tf2::toMsg(base_transform);
+	published_tf_msg.header.frame_id = m_odom_frame_id;
+	published_tf_msg.header.stamp = timestamp;
+	published_tf_msg.child_frame_id = m_baselink_frame_id;
+	m_tf_broadcaster.sendTransform(published_tf_msg);
+
+	m_last_update_time = timestamp;
+	m_last_pose = m_pose;
+}
+
+int main(int argc, char **argv)
+{
+	ros::init(argc, argv, "lvt");
+	lvt_ros vo("raw");
+	ros::spin();
+	return 0;
+}

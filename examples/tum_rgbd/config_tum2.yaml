@@ -1,0 +1,30 @@
+%YAML:1.0
+
+fx: 520.908620
+fy: 521.007327
+cx: 325.141442
+cy: 249.701764
+k1: 0.231222
+k2: -0.784899
+p1: -0.003257
+p2: -0.000105
+k3: 0.917205
+img_width: 640
+img_height: 480
+near_plane_distance: 0.1
+far_plane_distance: 5.0
+triangulation_ratio_test_threshold: 0.60
+tracking_ratio_test_threshold: 0.70
+descriptor_matching_threshold: 30
+min_num_matches_for_tracking: 10
+tracking_radius: 30
+agast_threshold: 18
+detection_cell_size: 2000
+max_keypoints_per_cell: 1000
+untracked_threshold: 10
+staged_threshold: 0
+enable_logging: 0
+enable_visualization: 1
+triangulation_policy: 2
+viewer_camera_size: 0.06
+viewer_point_size: 2
