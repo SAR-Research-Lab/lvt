@@ -1,6 +1,6 @@
 # LVT
 Lightweight Visual Tracking (LVT) is a real-time feature-based visual odometry system, supporting both Stereo and RGB-D sensors. The system is described in the following paper:
-> Mohamed Aladem and Samir A. Rawashdeh, "Lightweight Visual Odometry for Autonomous Mobile Robots" (under review)
+> Mohamed Aladem and Samir A. Rawashdeh, "Lightweight Visual Odometry for Autonomous Mobile Robots". Sensors 2018, 18(9).
 
 A video demonstrating the system:
 
