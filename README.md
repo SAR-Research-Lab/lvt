@@ -10,7 +10,7 @@ A video demonstrating the system:
 LVT uses CMake build system. It was built successfully on Linux Ubuntu 16.04 and Windows 10 using MSVC 2017. The build dependencies are:
 * [Eigen3](http://eigen.tuxfamily.org/index.php?title=Main_Page)
 * [OpenCV3](https://github.com/opencv/opencv) and [OpenCV3 contrib](https://github.com/opencv/opencv_contrib) which is needed for the BRIEF descriptor extractor.
-* [G2O](https://github.com/RainerKuemmerle/g2o)
+* [G2O](https://github.com/RainerKuemmerle/g2o/releases/tag/20170730_git)
 * [Pangolin](https://github.com/stevenlovegrove/Pangolin) - OPTIONAL, only needed if LVT is built with visualization enabled.
 
 Building then proceeds like any typical CMake-based project using the provided top-level CMakeLists file, which will generate lvt as a static library, lvt_c which is a C-interface for lvt as a shared library, and the executable example projects in their source directories.
