@@ -55,7 +55,8 @@ struct lvt_parameters
     enum
     {
         etriangulation_policy_decreasing_matches = 1,
-        etriangulation_policy_always_triangulate
+        etriangulation_policy_always_triangulate,
+        etriangulation_policy_map_size
     };
     int triangulation_policy;
     float viewer_camera_size;

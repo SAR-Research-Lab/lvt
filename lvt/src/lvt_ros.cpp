@@ -87,11 +87,10 @@ lvt_ros::lvt_ros(const std::string &img_transport)
 	m_last_pose.setIdentity();
 
 	ros::NodeHandle nh;
-	std::string stereo_ns = nh.resolveName("stereo");
-	std::string left_img_topic = ros::names::clean(stereo_ns + "/left/" + nh.resolveName("image_rect"));
-	std::string right_img_topic = ros::names::clean(stereo_ns + "/right/" + nh.resolveName("image_rect"));
-	std::string left_info_topic = stereo_ns + "/left/camera_info";
-	std::string right_info_topic = stereo_ns + "/right/camera_info";
+	std::string left_img_topic = "/left/image_rect_gray";  
+	std::string right_img_topic = "/right/image_rect_gray"; 
+	std::string left_info_topic = "/left/camera_info";
+	std::string right_info_topic = "/right/camera_info";
 
 	ROS_INFO("Subscribed to:\n\t* %s\n\t* %s\n\t* %s\n\t* %s",
 			 left_img_topic.c_str(), right_img_topic.c_str(),
@@ -133,19 +132,23 @@ lvt_ros::lvt_ros(const std::string &img_transport)
 	local_nh.param("odom_frame_id", m_odom_frame_id, std::string("odom"));
 	local_nh.param("base_link_frame_id", m_baselink_frame_id, std::string("base_link"));
 
-	local_nh.getParam("near_plane_distance", m_vo_params.near_plane_distance);
-	local_nh.getParam("far_plane_distance", m_vo_params.far_plane_distance);
-	local_nh.getParam("triangulation_ratio_test_threshold", m_vo_params.triangulation_ratio_test_threshold);
-	local_nh.getParam("tracking_ratio_test_threshold", m_vo_params.tracking_ratio_test_threshold);
-	local_nh.getParam("descriptor_matching_threshold", m_vo_params.descriptor_matching_threshold);
-	local_nh.getParam("tracking_radius", m_vo_params.tracking_radius);
-	local_nh.getParam("detection_cell_size", m_vo_params.detection_cell_size);
-	local_nh.getParam("max_keypoints_per_cell", m_vo_params.max_keypoints_per_cell);
-	local_nh.getParam("agast_threshold", m_vo_params.agast_threshold);
-	local_nh.getParam("untracked_threshold", m_vo_params.untracked_threshold);
-	local_nh.getParam("staged_threshold", m_vo_params.staged_threshold);
-	local_nh.getParam("enable_logging", m_vo_params.enable_logging);
-	local_nh.getParam("enable_visualization", m_vo_params.enable_visualization);
+	local_nh.param<float>("near_plane_distance", m_vo_params.near_plane_distance, 0.1);
+	local_nh.param<float>("far_plane_distance", m_vo_params.far_plane_distance, 500.0);
+	local_nh.param<float>("triangulation_ratio_test_threshold", m_vo_params.triangulation_ratio_test_threshold, 0.6);
+	local_nh.param<float>("tracking_ratio_test_threshold", m_vo_params.tracking_ratio_test_threshold, 0.8);
+	local_nh.param<float>("descriptor_matching_threshold", m_vo_params.descriptor_matching_threshold, 30.0);
+	local_nh.param<int>("tracking_radius", m_vo_params.tracking_radius, 25);
+	local_nh.param<int>("detection_cell_size", m_vo_params.detection_cell_size, 250);
+	local_nh.param<int>("max_keypoints_per_cell", m_vo_params.max_keypoints_per_cell, 150);
+	local_nh.param<int>("agast_threshold", m_vo_params.agast_threshold, 20);
+	local_nh.param<int>("untracked_threshold", m_vo_params.untracked_threshold, 10);
+	local_nh.param<int>("staged_threshold", m_vo_params.staged_threshold, 0);
+	int dumb = 0;
+	local_nh.param<int>("enable_logging", dumb, 1);
+	m_vo_params.enable_logging = dumb;
+	local_nh.param<int>("enable_visualization", dumb, 1);
+	m_vo_params.enable_visualization = dumb;
+	local_nh.param<int>("triangulation_policy", m_vo_params.triangulation_policy, 3);
 }
 
 lvt_ros::~lvt_ros()
@@ -158,13 +161,11 @@ lvt_ros::~lvt_ros()
 
 void lvt_ros::create_vo_system(const sensor_msgs::CameraInfoConstPtr &info_msg_left, const sensor_msgs::CameraInfoConstPtr &info_msg_right)
 {
-	image_geometry::StereoCameraModel model;
-	model.fromCameraInfo(*info_msg_left, *info_msg_right);
-	m_vo_params.baseline = model.baseline();
-	m_vo_params.fx = model.left().fx();
-	m_vo_params.fy = model.left().fy();
-	m_vo_params.cx = model.left().cx();
-	m_vo_params.cy = model.left().cy();
+	m_vo_params.baseline = fabs(info_msg_right->P[3] / info_msg_right->P[0]);
+	m_vo_params.fx = info_msg_right->P[0];
+	m_vo_params.fy = info_msg_right->P[0];
+	m_vo_params.cx = info_msg_right->P[2];
+	m_vo_params.cy = info_msg_right->P[6];
 	m_vo_params.img_width = info_msg_left->width;
 	m_vo_params.img_height = info_msg_left->height;
 	m_vo_system = lvt_system::create(m_vo_params, lvt_system::eSensor_STEREO);

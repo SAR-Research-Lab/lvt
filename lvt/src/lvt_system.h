@@ -83,6 +83,7 @@ class lvt_system
     bool need_new_triangulation();
     bool triangulation_policy_decreasing_matches();
     bool triangulation_policy_always_triangulate();
+    bool triangulation_policy_map_size();
 
     void register_measurments_values();
 

@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+
+<launch>
+        <node pkg="lvt" type="lvt_node" name="lvt" output="screen">
+                <param name="tracking_radius" value="25" />
+                <param name="detection_cell_size" value="250" />
+                <param name="max_keypoints_per_cell" value="150" />
+                <param name="agast_threshold" value="20" />
+                <param name="untracked_threshold" value="10" />
+                <param name="staged_threshold" value="0" />
+                <param name="enable_logging" value="1" />
+                <param name="enable_visualization" value="0" /> 
+                <param name="triangulation_policy" value="3" />               
+        </node>
+</launch>
+

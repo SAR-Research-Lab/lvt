@@ -54,7 +54,7 @@ class lvt_local_map
                                        lvt_image_features_struct *left_struct, lvt_image_features_struct *right_struct, bool dont_stage = false);
 
     void update_staged_map_points(const lvt_pose &cam_pose, lvt_image_features_struct *left_struct);
-    void clean_untracked_points();
+    void clean_untracked_points(lvt_image_features_struct *left_struct);
 
   private:
     LVT_ADD_LOGGING;
@@ -68,6 +68,7 @@ class lvt_local_map
         lvt_vector3 m_position; // world position of this point
         int m_counter;          // depending on context, if the point is staged then this is the number of frames it has been tracked while staged. If it is a map point, then this is the number of times it failed tracking.
         int m_age;              // number of frames this map point was successfully tracked and thus used in pose estimation
+        int m_match_idx;
     };
 
     typedef std::vector<lvt_map_point, Eigen::aligned_allocator<lvt_map_point>> lvt_map_point_array;

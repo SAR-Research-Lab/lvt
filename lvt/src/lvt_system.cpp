@@ -80,6 +80,10 @@ lvt_system *lvt_system::create(const lvt_parameters &params, eSensor sensor_type
     {
         instance->triangulation_policy = &lvt_system::triangulation_policy_always_triangulate;
     }
+    else if (params.triangulation_policy == lvt_parameters::etriangulation_policy_map_size)
+    {
+        instance->triangulation_policy = &lvt_system::triangulation_policy_map_size;
+    }
 
 #ifdef LVT_ENABLE_VISUALIZATION
     if (params.enable_visualization)
@@ -271,11 +275,6 @@ lvt_pose lvt_system::perform_tracking(const lvt_pose &estimated_pose, lvt_image_
 
     lvt_pose optimized_pose = m_pnp_solver->compute_pose(estimated_pose, left_struct, map_points, matches_left);
 
-    if (m_params.staged_threshold > 0)
-    {
-        m_local_map->update_staged_map_points(optimized_pose, left_struct);
-    }
-
 #ifdef LVT_ENABLE_VISUALIZATION
     if (m_params.enable_visualization)
     {
@@ -284,6 +283,13 @@ lvt_pose lvt_system::perform_tracking(const lvt_pose &estimated_pose, lvt_image_
         m_should_quit = m_visualization->process_events();
     }
 #endif //LVT_ENABLE_VISUALIZATION
+
+    m_local_map->clean_untracked_points(left_struct);
+
+    if (m_params.staged_threshold > 0)
+    {
+        m_local_map->update_staged_map_points(optimized_pose, left_struct);
+    }
 
     if (need_new_triangulation())
     {
@@ -294,8 +300,6 @@ lvt_pose lvt_system::perform_tracking(const lvt_pose &estimated_pose, lvt_image_
     {
         LVT_LOG("No new triangulation performed this frame.");
     }
-
-    m_local_map->clean_untracked_points();
 
     *is_tracking = true;
     return optimized_pose;
@@ -322,6 +326,11 @@ bool lvt_system::triangulation_policy_decreasing_matches()
 bool lvt_system::triangulation_policy_always_triangulate()
 {
     return true;
+}
+
+bool lvt_system::triangulation_policy_map_size()
+{
+    return (m_local_map->get_map_size() < 1000);
 }
 
 void lvt_system::register_measurments_values()

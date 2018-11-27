@@ -200,6 +200,7 @@ int lvt_local_map::find_matches(const lvt_pose &cam_pose, lvt_image_features_str
 
     for (int i = 0; i < matches.size(); i++)
     {
+        m_map_points[i].m_match_idx = matches[i];
         if (matches[i] == -2)
         {
             continue;
@@ -292,25 +293,29 @@ void lvt_local_map::triangulate(const lvt_pose &cam_pose, lvt_image_features_str
         assert(std::isfinite(world_pt.x()) && std::isfinite(world_pt.y()) && std::isfinite(world_pt.z()));
 
         // check if the point is in viewable region by camera
-        lvt_vector4 world_pt_h;
-        world_pt_h << world_pt, 1.0;
-        lvt_vector3 pt_cam = cml * world_pt_h;
-        if (pt_cam.z() < m_vo_params.near_plane_distance || pt_cam.z() > m_vo_params.far_plane_distance)
+        lvt_vector2 proj_pt_l, proj_pt_r;
+        if (!is_point_visible(world_pt, cml, m_vo_params, proj_pt_l) || !is_point_visible(world_pt, cmr, m_vo_params, proj_pt_r))
         {
             continue;
         }
 
         // check reprojection error
-        const double inv_zl = 1.0 / pt_cam.z();
-        const double plu = m_vo_params.fx * pt_cam.x() * inv_zl + cx;
-        const double plv = m_vo_params.fy * pt_cam.y() * inv_zl + cy;
-        assert(plu >= 0.0 && plu <= m_vo_params.img_width &&
-               plv >= 0.0 && plv <= m_vo_params.img_height);
-        double err_x1 = plu - u1.x;
-        double err_y1 = plv - u1.y;
-        if ((err_x1 * err_x1 + err_y1 * err_y1) > LVT_REPROJECTION_TH2)
         {
-            continue;
+            double err_x = proj_pt_l.x() - u1.x;
+            double err_y = proj_pt_l.y() - u1.y;
+            if ((err_x * err_x + err_y * err_y) > LVT_REPROJECTION_TH2)
+            {
+                continue;
+            }
+        }
+
+        {
+            double err_x = proj_pt_r.x() - u2.x;
+            double err_y = proj_pt_r.y() - u2.y;
+            if ((err_x * err_x + err_y * err_y) > LVT_REPROJECTION_TH2)
+            {
+                continue;
+            }
         }
 
         // create map point
@@ -337,7 +342,7 @@ void lvt_local_map::update_with_new_triangulation(const lvt_pose &cam_pose,
         triangulate(cam_pose, left_struct, right_struct, &new_triangulations);
     }
     LVT_ASSERT(!new_triangulations.empty() && "Nothing was triangulated");
-    if (dont_stage || m_vo_params.staged_threshold == 0)
+    if (dont_stage || m_vo_params.staged_threshold == 0 || get_map_size() < LVT_N_MAP_POINTS)
     {
         m_map_points.insert(m_map_points.end(), new_triangulations.begin(), new_triangulations.end());
     }
@@ -385,10 +390,24 @@ void lvt_local_map::update_staged_map_points(const lvt_pose &cam_pose, lvt_image
             std::to_string(n_upgraded_points) + " upgraded to map points, " + std::to_string(m_staged_points.size()) + " remain.");
 }
 
-void lvt_local_map::clean_untracked_points()
+void lvt_local_map::clean_untracked_points(lvt_image_features_struct *left_struct)
 {
     const int th = m_vo_params.untracked_threshold;
-    m_map_points.erase(std::remove_if(m_map_points.begin(), m_map_points.end(),
-                                      [&th](const lvt_map_point &pt) { return pt.m_counter >= th; }),
-                       m_map_points.end());
+    lvt_map_point_array cleaned_map_points;
+    cleaned_map_points.reserve(m_map_points.size());
+    for (int i = 0; i < m_map_points.size(); i++)
+    {
+        if (m_map_points[i].m_counter >= th)
+        {
+            if (m_map_points[i].m_match_idx >= 0)
+            {
+                left_struct->mark_as_matched(m_map_points[i].m_match_idx, false);
+            }
+        }
+        else
+        {
+            cleaned_map_points.push_back(m_map_points[i]);
+        }
+    }
+    cleaned_map_points.swap(m_map_points);
 }
