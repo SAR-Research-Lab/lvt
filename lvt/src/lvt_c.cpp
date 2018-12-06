@@ -47,7 +47,7 @@ LVT_API lvt_handle lvt_create(const char *config_file_name, int sensor_type)
     return static_cast<lvt_handle>(vo);
 }
 
-LVT_API void lvt_destroy_vo(lvt_handle vo_system)
+LVT_API void lvt_destroy(lvt_handle vo_system)
 {
     assert(vo_system != NULL);
     try

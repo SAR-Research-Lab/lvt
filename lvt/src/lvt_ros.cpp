@@ -64,17 +64,22 @@ class lvt_ros
 
 	ros::ServiceServer m_reset_srv;
 	ros::Publisher m_odom_pub;
-	ros::Publisher m_pose_pub;
 
 	tf2_ros::Buffer m_tf_buffer;
 	tf2_ros::TransformListener m_tf_listener;
 	tf2_ros::TransformBroadcaster m_tf_broadcaster;
 	std::string m_camera_frame_id, m_odom_frame_id, m_baselink_frame_id;
-	tf2::Transform m_pose, m_last_pose;
+
+	tf2::Transform m_base_to_odom, m_base_to_sensor;
+	lvt_matrix33 m_rot_fix; // to align the poses so that z-axis is up and x-axis to the front.
+	lvt_matrix33 m_last_rotation;
+	lvt_vector3 m_last_position;
 	ros::Time m_last_update_time;
+	bool m_reset_pose_on_lost_vo; // in case when vo is lost and reset you want to continue accumelating poses from where you left off
 
 	void create_vo_system(const sensor_msgs::CameraInfoConstPtr &info_msg_left, const sensor_msgs::CameraInfoConstPtr &info_msg_right);
 	bool reset_vo(std_srvs::Empty::Request &, std_srvs::Empty::Response &);
+	void init_transforms();
 	void on_stereo_image(
 		const sensor_msgs::ImageConstPtr &img_msg_left, const sensor_msgs::CameraInfoConstPtr &info_msg_left,
 		const sensor_msgs::ImageConstPtr &img_msg_right, const sensor_msgs::CameraInfoConstPtr &info_msg_right);
@@ -83,12 +88,15 @@ class lvt_ros
 lvt_ros::lvt_ros(const std::string &img_transport)
 	: m_vo_system(nullptr), m_tf_listener(m_tf_buffer)
 {
-	m_pose.setIdentity();
-	m_last_pose.setIdentity();
+	m_rot_fix = Eigen::AngleAxisd(-1.57079632679, Eigen::Vector3d::UnitZ()).toRotationMatrix() * Eigen::AngleAxisd(-1.57079632679, Eigen::Vector3d::UnitX()).toRotationMatrix();
+	m_base_to_odom.setIdentity();
+	m_base_to_sensor.setIdentity();
+	m_last_rotation = m_rot_fix;
+	m_last_position.setZero();
 
 	ros::NodeHandle nh;
-	std::string left_img_topic = "/left/image_rect_gray";  
-	std::string right_img_topic = "/right/image_rect_gray"; 
+	std::string left_img_topic = "/left/image_rect_gray";
+	std::string right_img_topic = "/right/image_rect_gray";
 	std::string left_info_topic = "/left/camera_info";
 	std::string right_info_topic = "/right/camera_info";
 
@@ -126,7 +134,6 @@ lvt_ros::lvt_ros(const std::string &img_transport)
 
 	m_reset_srv = local_nh.advertiseService("reset_vo", &lvt_ros::reset_vo, this);
 	m_odom_pub = local_nh.advertise<nav_msgs::Odometry>("odometry", 1);
-	m_pose_pub = local_nh.advertise<geometry_msgs::PoseStamped>("pose", 1);
 
 	local_nh.param("sensor_frame_id", m_camera_frame_id, std::string("camera"));
 	local_nh.param("odom_frame_id", m_odom_frame_id, std::string("odom"));
@@ -149,6 +156,9 @@ lvt_ros::lvt_ros(const std::string &img_transport)
 	local_nh.param<int>("enable_visualization", dumb, 1);
 	m_vo_params.enable_visualization = dumb;
 	local_nh.param<int>("triangulation_policy", m_vo_params.triangulation_policy, 3);
+
+	local_nh.param<int>("m_reset_pose_on_lost_vo", dumb, 1);
+	m_reset_pose_on_lost_vo = dumb;
 }
 
 lvt_ros::~lvt_ros()
@@ -169,7 +179,6 @@ void lvt_ros::create_vo_system(const sensor_msgs::CameraInfoConstPtr &info_msg_l
 	m_vo_params.img_width = info_msg_left->width;
 	m_vo_params.img_height = info_msg_left->height;
 	m_vo_system = lvt_system::create(m_vo_params, lvt_system::eSensor_STEREO);
-	m_pose.setIdentity();
 }
 
 bool lvt_ros::reset_vo(std_srvs::Empty::Request &, std_srvs::Empty::Response &)
@@ -178,9 +187,29 @@ bool lvt_ros::reset_vo(std_srvs::Empty::Request &, std_srvs::Empty::Response &)
 	if (m_vo_system)
 	{
 		m_vo_system->reset();
+		m_last_rotation = m_rot_fix;
+		m_last_position.setZero();
+		m_base_to_odom.setIdentity();
+		m_tf_buffer.clear();
 		ROS_INFO("VO was reset.");
 	}
+	init_transforms();
 	return true;
+}
+
+void lvt_ros::init_transforms()
+{
+	std::string error_msg;
+	if (m_tf_buffer.canTransform(m_baselink_frame_id, m_camera_frame_id, ros::Time(), &error_msg))
+	{
+		tf2::fromMsg(m_tf_buffer.lookupTransform(m_baselink_frame_id, m_camera_frame_id, ros::Time()).transform, m_base_to_sensor);
+	}
+	else
+	{
+		ROS_WARN_THROTTLE(10.0, "Cannot transform from '%s' to '%s'. Will assume identity.", m_baselink_frame_id.c_str(), m_camera_frame_id.c_str());
+		ROS_DEBUG("Transform error: %s", error_msg.c_str());
+		m_base_to_sensor.setIdentity();
+	}
 }
 
 void lvt_ros::on_stereo_image(
@@ -190,6 +219,7 @@ void lvt_ros::on_stereo_image(
 	if (!m_vo_system)
 	{
 		create_vo_system(info_msg_left, info_msg_right);
+		init_transforms();
 	}
 
 	const ros::Time &timestamp = img_msg_left->header.stamp;
@@ -212,45 +242,51 @@ void lvt_ros::on_stereo_image(
 	{
 		ROS_ERROR("Tracking was lost. Reseting VO.");
 		m_vo_system->reset();
+		if (m_reset_pose_on_lost_vo)
+		{
+			m_base_to_odom.setIdentity();
+			m_last_rotation = m_rot_fix;
+			m_last_position.setZero();
+			init_transforms();
+		}
+
 		return;
 	}
 
-	const lvt_quaternion q = sl_pose.get_orientation_quaternion();
-	const lvt_vector3 pos = sl_pose.get_position();
-	m_pose.setOrigin(tf2::Vector3(pos.x(), pos.y(), pos.z()));
-	m_pose.setRotation(tf2::Quaternion(q.x(), q.y(), q.z(), q.w()));
-	tf2::Transform base_to_sensor;
-	std::string error_msg;
-	if (m_tf_buffer.canTransform(m_baselink_frame_id, m_camera_frame_id, timestamp, &error_msg))
-	{
-		tf2::fromMsg(m_tf_buffer.lookupTransform(m_baselink_frame_id, m_camera_frame_id, timestamp).transform,
-					 base_to_sensor);
-	}
-	else
-	{
-		ROS_WARN_THROTTLE(10.0, "Cannot transform from '%s' to '%s'. Will assume identity.",
-						  m_baselink_frame_id.c_str(), m_camera_frame_id.c_str());
-		ROS_DEBUG("Transform error: %s", error_msg.c_str());
-		base_to_sensor.setIdentity();
-	}
+	const lvt_matrix33 current_rotation_mtrx = m_rot_fix * sl_pose.get_orientation_matrix();
+	const lvt_matrix33 rot_delta = current_rotation_mtrx * m_last_rotation.transpose();
+	const lvt_quaternion delta_q = lvt_quaternion(rot_delta);
+	const lvt_vector3 current_pos = m_rot_fix * sl_pose.get_position();
+	const lvt_vector3 pos_delta = current_pos - m_last_position;
 
-	tf2::Transform base_transform = base_to_sensor * m_pose * base_to_sensor.inverse();
+	tf2::Transform delta_odom_sensor_tf;
+	delta_odom_sensor_tf.setOrigin(tf2::Vector3(pos_delta.x(), pos_delta.y(), pos_delta.z()));
+	delta_odom_sensor_tf.setRotation(tf2::Quaternion(delta_q.x(), delta_q.y(), delta_q.z(), delta_q.w()));
 
+	tf2::Transform delta_odom_base_tf = m_base_to_sensor * delta_odom_sensor_tf * m_base_to_sensor.inverse();
+	m_base_to_odom = m_base_to_odom * delta_odom_base_tf;
 	nav_msgs::Odometry odometry_msg;
 	odometry_msg.header.stamp = timestamp;
 	odometry_msg.header.frame_id = m_odom_frame_id;
 	odometry_msg.child_frame_id = m_baselink_frame_id;
-	tf2::toMsg(base_transform, odometry_msg.pose.pose);
-	tf2::Transform delta_transform = base_to_sensor * m_last_pose.inverse() * m_pose * base_to_sensor.inverse();
+	geometry_msgs::Transform base2odom = tf2::toMsg(m_base_to_odom);
+	odometry_msg.pose.pose.position.x = base2odom.translation.x;
+	odometry_msg.pose.pose.position.y = base2odom.translation.y;
+	odometry_msg.pose.pose.position.z = base2odom.translation.z;
+	odometry_msg.pose.pose.orientation.x = base2odom.rotation.x;
+	odometry_msg.pose.pose.orientation.y = base2odom.rotation.y;
+	odometry_msg.pose.pose.orientation.z = base2odom.rotation.z;
+	odometry_msg.pose.pose.orientation.w = base2odom.rotation.w;
+
 	if (!m_last_update_time.isZero())
 	{
 		double delta_t = (timestamp - m_last_update_time).toSec();
 		if (delta_t)
 		{
-			odometry_msg.twist.twist.linear.x = delta_transform.getOrigin().getX() / delta_t;
-			odometry_msg.twist.twist.linear.y = delta_transform.getOrigin().getY() / delta_t;
-			odometry_msg.twist.twist.linear.z = delta_transform.getOrigin().getZ() / delta_t;
-			tf2::Quaternion delta_rot = delta_transform.getRotation();
+			odometry_msg.twist.twist.linear.x = delta_odom_base_tf.getOrigin().getX() / delta_t;
+			odometry_msg.twist.twist.linear.y = delta_odom_base_tf.getOrigin().getY() / delta_t;
+			odometry_msg.twist.twist.linear.z = delta_odom_base_tf.getOrigin().getZ() / delta_t;
+			tf2::Quaternion delta_rot = delta_odom_base_tf.getRotation();
 			tf2Scalar angle = delta_rot.getAngle();
 			tf2::Vector3 axis = delta_rot.getAxis();
 			tf2::Vector3 angular_twist = axis * angle / delta_t;
@@ -262,21 +298,16 @@ void lvt_ros::on_stereo_image(
 
 	m_odom_pub.publish(odometry_msg);
 
-	geometry_msgs::PoseStamped pose_msg;
-	pose_msg.header.stamp = odometry_msg.header.stamp;
-	pose_msg.header.frame_id = odometry_msg.header.frame_id;
-	pose_msg.pose = odometry_msg.pose.pose;
-	m_pose_pub.publish(pose_msg);
-
-	geometry_msgs::TransformStamped published_tf_msg;
-	published_tf_msg.transform = tf2::toMsg(base_transform);
-	published_tf_msg.header.frame_id = m_odom_frame_id;
-	published_tf_msg.header.stamp = timestamp;
-	published_tf_msg.child_frame_id = m_baselink_frame_id;
-	m_tf_broadcaster.sendTransform(published_tf_msg);
+	geometry_msgs::TransformStamped transform_stamped;
+	transform_stamped.header.stamp = timestamp;
+	transform_stamped.header.frame_id = m_odom_frame_id;
+	transform_stamped.child_frame_id = m_baselink_frame_id;
+	transform_stamped.transform = tf2::toMsg(m_base_to_odom);
+	m_tf_broadcaster.sendTransform(transform_stamped);
 
 	m_last_update_time = timestamp;
-	m_last_pose = m_pose;
+	m_last_rotation = current_rotation_mtrx;
+	m_last_position = current_pos;
 }
 
 int main(int argc, char **argv)
