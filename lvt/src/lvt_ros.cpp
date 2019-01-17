@@ -89,6 +89,7 @@ lvt_ros::lvt_ros(const std::string &img_transport)
 	: m_vo_system(nullptr), m_tf_listener(m_tf_buffer)
 {
 	m_rot_fix = Eigen::AngleAxisd(-1.57079632679, Eigen::Vector3d::UnitZ()).toRotationMatrix() * Eigen::AngleAxisd(-1.57079632679, Eigen::Vector3d::UnitX()).toRotationMatrix();
+	m_rot_fix.setIdentity();
 	m_base_to_odom.setIdentity();
 	m_base_to_sensor.setIdentity();
 	m_last_rotation = m_rot_fix;
@@ -200,16 +201,14 @@ bool lvt_ros::reset_vo(std_srvs::Empty::Request &, std_srvs::Empty::Response &)
 void lvt_ros::init_transforms()
 {
 	std::string error_msg;
-	if (m_tf_buffer.canTransform(m_baselink_frame_id, m_camera_frame_id, ros::Time(), &error_msg))
-	{
-		tf2::fromMsg(m_tf_buffer.lookupTransform(m_baselink_frame_id, m_camera_frame_id, ros::Time()).transform, m_base_to_sensor);
-	}
-	else
-	{
-		ROS_WARN_THROTTLE(10.0, "Cannot transform from '%s' to '%s'. Will assume identity.", m_baselink_frame_id.c_str(), m_camera_frame_id.c_str());
-		ROS_DEBUG("Transform error: %s", error_msg.c_str());
-		m_base_to_sensor.setIdentity();
-	}
+	try {
+        	tf2::fromMsg(m_tf_buffer.lookupTransform(m_baselink_frame_id, m_camera_frame_id, ros::Time(), ros::Duration(5)).transform, m_base_to_sensor);
+    	}
+    	catch (tf2::TransformException &ex) {
+        	ROS_WARN_THROTTLE(10.0, "Could NOT transform %s to %s: %s. Will assume identity", m_baselink_frame_id, m_camera_frame_id, ex.what());
+        	ROS_DEBUG("Transform error: %s", error_msg.c_str());
+        	m_base_to_sensor.setIdentity();
+    	}
 }
 
 void lvt_ros::on_stereo_image(
