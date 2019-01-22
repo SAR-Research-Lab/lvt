@@ -88,7 +88,7 @@ private:
 lvt_ros::lvt_ros(const std::string &img_transport)
         : m_vo_system(nullptr), m_tf_listener(m_tf_buffer)
 {
-    m_rot_fix;// = Eigen::AngleAxisd(-1.57079632679, Eigen::Vector3d::UnitZ()).toRotationMatrix() * Eigen::AngleAxisd(-1.57079632679, Eigen::Vector3d::UnitX()).toRotationMatrix();
+    m_rot_fix.setIdentity();// = Eigen::AngleAxisd(-1.57079632679, Eigen::Vector3d::UnitZ()).toRotationMatrix() * Eigen::AngleAxisd(-1.57079632679, Eigen::Vector3d::UnitX()).toRotationMatrix();
     m_base_to_odom.setIdentity();
     m_base_to_sensor.setIdentity();
     m_last_rotation = m_rot_fix;
@@ -255,15 +255,15 @@ void lvt_ros::on_stereo_image(
         return;
     }
 
-     const lvt_matrix33 current_rotation_mtrx = m_rot_fix * sl_pose.get_orientation_matrix();
+     const lvt_matrix33 current_rotation_mtrx =  sl_pose.get_orientation_matrix();
      const lvt_matrix33 rot_delta = current_rotation_mtrx * m_last_rotation.transpose();
      const lvt_quaternion delta_q = lvt_quaternion(rot_delta);
-     const lvt_vector3 current_pos = m_rot_fix * sl_pose.get_position();
+     const lvt_vector3 current_pos = sl_pose.get_position();
      const lvt_vector3 pos_delta = current_pos - m_last_position;
 
     tf2::Transform delta_odom_sensor_tf;
-     delta_odom_sensor_tf.setOrigin(tf2::Vector3(pos_delta.x(), pos_delta.y(), pos_delta.z()));
-     delta_odom_sensor_tf.setRotation(tf2::Quaternion(delta_q.x(), delta_q.y(), delta_q.z(), delta_q.w()));
+     delta_odom_sensor_tf.setOrigin(tf2::Vector3(pos_delta.z(), -pos_delta.x(), -pos_delta.y()));
+     delta_odom_sensor_tf.setRotation(tf2::Quaternion(delta_q.z(), -delta_q.x(), -delta_q.y(), delta_q.w()));
 
     lvt_vector3 current_position = sl_pose.get_position();
     lvt_quaternion current_q = sl_pose.get_orientation_quaternion();
@@ -287,7 +287,7 @@ void lvt_ros::on_stereo_image(
 //    tf2::fromMsg(deltaTransf, delta_odom_sensor_tf);
 
     // tf2::Transform delta_odom_base_tf = m_base_to_sensor * delta_odom_sensor_tf * m_base_to_sensor.inverse();
-    // m_base_to_odom = m_base_to_odom * delta_odom_base_tf;
+    //      m_base_to_odom = m_base_to_odom * delta_odom_base_tf;
     nav_msgs::Odometry odometry_msg;
     odometry_msg.header.stamp = timestamp;
     odometry_msg.header.frame_id = m_odom_frame_id;
@@ -307,16 +307,16 @@ void lvt_ros::on_stereo_image(
         int x = 0;
         if (delta_t)
         {
-             odometry_msg.twist.twist.linear.x = pos_delta.x() / delta_t;
-             odometry_msg.twist.twist.linear.y = pos_delta.y() / delta_t;
-             odometry_msg.twist.twist.linear.z = pos_delta.z() / delta_t;
-             tf2::Quaternion delta_rot = delta_odom_sensor_tf.getRotation();
-             tf2Scalar angle = delta_rot.getAngle();
-             tf2::Vector3 axis = delta_rot.getAxis();
-             tf2::Vector3 angular_twist = axis * angle / delta_t;
-             odometry_msg.twist.twist.angular.x = angular_twist.x();
-             odometry_msg.twist.twist.angular.y = angular_twist.y();
-             odometry_msg.twist.twist.angular.z = angular_twist.z();
+            odometry_msg.twist.twist.linear.x = delta_odom_sensor_tf.getOrigin().getX() / delta_t;
+            odometry_msg.twist.twist.linear.y = delta_odom_sensor_tf.getOrigin().getY() / delta_t;
+            odometry_msg.twist.twist.linear.z = delta_odom_sensor_tf.getOrigin().getZ() / delta_t;
+            tf2::Quaternion delta_rot = delta_odom_sensor_tf.getRotation();
+            tf2Scalar angle = delta_rot.getAngle();
+            tf2::Vector3 axis = delta_rot.getAxis();
+            tf2::Vector3 angular_twist = axis * angle / delta_t;
+            odometry_msg.twist.twist.angular.x = angular_twist.x();
+            odometry_msg.twist.twist.angular.y = angular_twist.y();
+            odometry_msg.twist.twist.angular.z = angular_twist.z();
         }
     }
 
