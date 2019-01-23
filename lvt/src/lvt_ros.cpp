@@ -311,7 +311,7 @@ void lvt_ros::on_stereo_image(
             odometry_msg.twist.twist.linear.y = delta_odom_sensor_tf.getOrigin().getY() / delta_t;
             odometry_msg.twist.twist.linear.z = delta_odom_sensor_tf.getOrigin().getZ() / delta_t;
             tf2::Quaternion delta_rot = delta_odom_sensor_tf.getRotation();
-            tf2Scalar angle = delta_rot.getAngle();
+            tf2Scalar angle = delta_rot.getAngle() * 0.5;
             tf2::Vector3 axis = delta_rot.getAxis();
             tf2::Vector3 angular_twist = axis * angle / delta_t;
             odometry_msg.twist.twist.angular.x = angular_twist.x();
