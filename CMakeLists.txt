@@ -11,6 +11,8 @@ ENDIF()
 
 MESSAGE("Build type: " ${CMAKE_BUILD_TYPE})
 
+
+
 add_compile_options(-march=native -fvisibility=hidden -fPIC)
 
 find_package(OpenCV 3.1)
